@@ -1,8 +1,10 @@
 // Market data types
 
+export type Platform = 'kalshi' | 'polymarket' | 'predictit' | 'manifold';
+
 export interface Market {
   id: string;
-  platform: 'kalshi' | 'polymarket';
+  platform: Platform;
   title: string;
   description: string;
   keywords: string[];
@@ -37,9 +39,25 @@ export interface ArbitrageOpportunity {
   profitPotential: number; // Expected profit per $1 payout bundle
   direction: 'buy_poly_sell_kalshi' | 'buy_kalshi_sell_poly';
   legs?: {
-    yes: { platform: 'polymarket' | 'kalshi'; price: number };
-    no: { platform: 'polymarket' | 'kalshi'; price: number };
+    yes: { platform: Platform; price: number };
+    no: { platform: Platform; price: number };
   };
   confidence: number; // 0-1, how confident we are this is the same event
   matchReason: string; // Why we think these are the same market
+}
+
+export interface MultiVenueArbitrageOpportunity {
+  markets: Market[];
+  yesMarket: Market;
+  noMarket: Market;
+  spread: number;
+  profitPotential: number;
+  costPerBundle: number;
+  feesAndSlippage: number;
+  legs: {
+    yes: { platform: Platform; marketId: string; price: number };
+    no: { platform: Platform; marketId: string; price: number };
+  };
+  confidence: number;
+  matchReason: string;
 }

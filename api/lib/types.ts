@@ -23,6 +23,8 @@ export interface FreshnessMetadata {
   sources: {
     polymarket: SourceStatus;
     kalshi: SourceStatus;
+    predictit?: SourceStatus;
+    manifold?: SourceStatus;
   };
 }
 

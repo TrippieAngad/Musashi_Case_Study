@@ -1,0 +1,22 @@
+{
+  "name": "musashi-api",
+  "version": "1.0.0",
+  "description": "Standalone Musashi API, SDK, and backend services for prediction market intelligence.",
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "dev": "node --import tsx scripts/local-api-server.ts",
+    "local:api": "node --import tsx scripts/local-api-server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p api/tsconfig.json"
+  },
+  "dependencies": {
+    "@vercel/node": "^3.0.21"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,7 +1,7 @@
 // Cross-platform arbitrage detector
 // Matches equivalent Polymarket/Kalshi contracts and prices covered YES/NO bundles.
 
-import { Market, ArbitrageOpportunity } from '../types/market';
+import { Market, ArbitrageOpportunity, MultiVenueArbitrageOpportunity, Platform } from '../types/market';
 
 const STOP_WORDS = new Set([
   'will', 'the', 'a', 'an', 'in', 'on', 'at', 'by', 'for', 'to', 'of',
@@ -22,11 +22,14 @@ const OUTCOME_PHRASES = [
 
 interface ContractSignature {
   terms: Set<string>;
+  specificTerms: Set<string>;
   years: Set<string>;
   dates: Set<string>;
   numbers: Set<string>;
   outcomes: Set<string>;
+  outcomeFamilies: Set<string>;
   scopes: Set<string>;
+  parties: Set<string>;
 }
 
 interface MatchResult {
@@ -37,8 +40,8 @@ interface MatchResult {
 
 interface BundleCandidate {
   direction: ArbitrageOpportunity['direction'];
-  yesPlatform: 'polymarket' | 'kalshi';
-  noPlatform: 'polymarket' | 'kalshi';
+  yesPlatform: Platform;
+  noPlatform: Platform;
   yesPrice: number;
   noPrice: number;
   costPerBundle: number;
@@ -48,6 +51,16 @@ interface BundleCandidate {
 const DEFAULT_FEES_AND_SLIPPAGE = Number.parseFloat(
   process.env.MUSASHI_ARB_COST_BUFFER ?? '0.02',
 );
+
+const GENERIC_CONTRACT_TERMS = new Set([
+  'will', 'win', 'wins', 'won', 'winner', 'nominee', 'nomination',
+  'presidential', 'president', 'election', 'elected', 'market',
+  'resolve', 'named', 'individual', 'accepts', 'party', 'u.s',
+  'yes', 'no', 'contract', 'who', 'which', 'democratic', 'democrat',
+  'democrats', 'republican', 'republicans', 'gop', 'april', 'january',
+  'february', 'march', 'may', 'june', 'july', 'august', 'september',
+  'october', 'november', 'december',
+]);
 
 function normalizeTitle(title: string): string {
   return title
@@ -66,6 +79,15 @@ function tokens(title: string): string[] {
 
 function extractTerms(title: string): Set<string> {
   return new Set(tokens(title).filter(word => word.length >= 3));
+}
+
+function extractSpecificTerms(title: string): Set<string> {
+  return new Set(
+    tokens(title)
+      .filter(word => word.length >= 3)
+      .filter(word => !GENERIC_CONTRACT_TERMS.has(word))
+      .filter(word => !/^20\d{2}$/.test(word))
+  );
 }
 
 function extractYears(title: string, endDate?: string): Set<string> {
@@ -106,6 +128,28 @@ function extractOutcomes(title: string): Set<string> {
   return outcomes;
 }
 
+function extractOutcomeFamilies(title: string): Set<string> {
+  const normalized = normalizeTitle(title);
+  const families = new Set<string>();
+
+  if (/\bnominee\b|\bnomination\b/.test(normalized)) families.add('nomination');
+  if (/\belection\b|\belected\b/.test(normalized)) families.add('election');
+  if (/\brate hike\b|\brate cut\b|\bcut rates\b|\braise rates\b/.test(normalized)) families.add('rate_policy');
+  if (/\babove\b|\bbelow\b|\bover\b|\bunder\b|\breach(?:es)?\b|\bhit(?:s)?\b|\bpass(?:es)?\b/.test(normalized)) families.add('threshold');
+  if (/\bvisit\b|\bvisits\b/.test(normalized)) families.add('visit');
+  if (/\bannounce(?:s|d)?\b|\bannouncement\b/.test(normalized)) families.add('announcement');
+  if (/\bblockade\b|\blift(?:ed)?\b|\bend(?:ed)?\b/.test(normalized)) families.add('geopolitical_action');
+  if (/\bresign\b|\bindicted\b|\bapproved\b|\bland\b|\blaunch\b/.test(normalized)) families.add('event_action');
+
+  return families;
+}
+
+function hasOutcomeFamilyConflict(a: Set<string>, b: Set<string>): boolean {
+  const materialA = new Set([...a].filter(family => family !== 'announcement'));
+  const materialB = new Set([...b].filter(family => family !== 'announcement'));
+  return hasConflict(materialA, materialB);
+}
+
 function extractScopes(title: string): Set<string> {
   const normalized = normalizeTitle(title);
   const scopes = new Set<string>();
@@ -118,14 +162,27 @@ function extractScopes(title: string): Set<string> {
   return scopes;
 }
 
+function extractParties(title: string): Set<string> {
+  const normalized = normalizeTitle(title);
+  const parties = new Set<string>();
+
+  if (/\bdemocrat(?:ic|s)?\b/.test(normalized)) parties.add('democratic');
+  if (/\brepublican(?:s)?\b|\bgop\b/.test(normalized)) parties.add('republican');
+
+  return parties;
+}
+
 function signature(market: Market): ContractSignature {
   return {
     terms: extractTerms(market.title),
+    specificTerms: extractSpecificTerms(market.title),
     years: extractYears(market.title, market.endDate),
     dates: extractDates(market.title),
     numbers: extractNumbers(market.title),
     outcomes: extractOutcomes(market.title),
+    outcomeFamilies: extractOutcomeFamilies(market.title),
     scopes: extractScopes(market.title),
+    parties: extractParties(`${market.title} ${market.description ?? ''}`),
   };
 }
 
@@ -182,13 +239,39 @@ function areMarketsSimilar(poly: Market, kalshi: Market): MatchResult {
     return { isSimilar: false, confidence: 0, reason: 'Different outcome wording' };
   }
 
+  if (hasOutcomeFamilyConflict(polySig.outcomeFamilies, kalshiSig.outcomeFamilies)) {
+    return { isSimilar: false, confidence: 0, reason: 'Different outcome type' };
+  }
+
   if (hasConflict(polySig.scopes, kalshiSig.scopes)) {
     return { isSimilar: false, confidence: 0, reason: 'Different contract scope' };
   }
 
+  if (hasConflict(polySig.parties, kalshiSig.parties)) {
+    return { isSimilar: false, confidence: 0, reason: 'Different political parties' };
+  }
+
+  if (
+    polySig.specificTerms.size > 0 &&
+    kalshiSig.specificTerms.size > 0 &&
+    intersectionSize(polySig.specificTerms, kalshiSig.specificTerms) === 0
+  ) {
+    return { isSimilar: false, confidence: 0, reason: 'Different named entity' };
+  }
+
   const titleSim = jaccard(polySig.terms, kalshiSig.terms);
+  const specificSim = jaccard(polySig.specificTerms, kalshiSig.specificTerms);
   const keywordOverlap = calculateKeywordOverlap(poly, kalshi);
   const sharedTerms = intersectionSize(polySig.terms, kalshiSig.terms);
+
+  if (
+    polySig.specificTerms.size > 0 &&
+    kalshiSig.specificTerms.size > 0 &&
+    titleSim < 0.75 &&
+    specificSim < 0.45
+  ) {
+    return { isSimilar: false, confidence: 0, reason: 'Different named entity or context' };
+  }
 
   let confidence = Math.max(titleSim, Math.min(keywordOverlap / 8, 0.85));
   const blockersMatched =
@@ -257,6 +340,25 @@ function priceBundle(poly: Market, kalshi: Market, feesAndSlippage: number): Bun
       edge: 1 - kalshiYesPolyNo,
     },
   ];
+}
+
+function pricePair(
+  yesMarket: Market,
+  noMarket: Market,
+  feesAndSlippage: number,
+): Omit<BundleCandidate, 'direction'> {
+  const yesPrice = buyYesPrice(yesMarket);
+  const noPrice = buyNoPrice(noMarket);
+  const costPerBundle = yesPrice + noPrice + feesAndSlippage;
+
+  return {
+    yesPlatform: yesMarket.platform,
+    noPlatform: noMarket.platform,
+    yesPrice,
+    noPrice,
+    costPerBundle,
+    edge: 1 - costPerBundle,
+  };
 }
 
 function candidatesFor(poly: Market, kalshiByCategory: Map<string, Market[]>): Market[] {
@@ -362,4 +464,62 @@ export function getTopArbitrage(
   }
 
   return opportunities.slice(0, limit);
+}
+
+/**
+ * Detect covered arbitrage across every venue in the market array.
+ *
+ * This does not replace the legacy Polymarket/Kalshi response. It is a
+ * generalized scanner for future multi-venue endpoints: find equivalent
+ * contracts, then buy the cheapest YES and cheapest complementary NO across
+ * any two venues.
+ */
+export function detectMultiVenueArbitrage(
+  markets: Market[],
+  minSpread: number = 0.03,
+  feesAndSlippage: number = DEFAULT_FEES_AND_SLIPPAGE,
+): MultiVenueArbitrageOpportunity[] {
+  const opportunities: MultiVenueArbitrageOpportunity[] = [];
+
+  for (let i = 0; i < markets.length; i++) {
+    for (let j = i + 1; j < markets.length; j++) {
+      const first = markets[i];
+      const second = markets[j];
+      if (first.platform === second.platform) continue;
+
+      const similarity = areMarketsSimilar(first, second);
+      if (!similarity.isSimilar) continue;
+
+      const bundles = [
+        pricePair(first, second, feesAndSlippage),
+        pricePair(second, first, feesAndSlippage),
+      ].sort((a, b) => b.edge - a.edge);
+      const best = bundles[0];
+
+      if (best.edge < minSpread) continue;
+
+      const yesMarket = best.yesPlatform === first.platform ? first : second;
+      const noMarket = best.noPlatform === first.platform ? first : second;
+
+      opportunities.push({
+        markets: [first, second],
+        yesMarket,
+        noMarket,
+        spread: +best.edge.toFixed(4),
+        profitPotential: +best.edge.toFixed(4),
+        costPerBundle: +best.costPerBundle.toFixed(4),
+        feesAndSlippage,
+        legs: {
+          yes: { platform: best.yesPlatform, marketId: yesMarket.id, price: best.yesPrice },
+          no: { platform: best.noPlatform, marketId: noMarket.id, price: best.noPrice },
+        },
+        confidence: similarity.confidence,
+        matchReason: similarity.reason,
+      });
+    }
+  }
+
+  opportunities.sort((a, b) => b.profitPotential - a.profitPotential);
+  console.log(`[Arbitrage] Found ${opportunities.length} multi-venue covered opportunities (min edge: ${minSpread})`);
+  return opportunities;
 }
