@@ -33,7 +33,7 @@ Use the legacy Musashi API with the trading bot in paper mode on live Polymarket
 
 2. The arbitrage math was not real arbitrage.
 
-   previous code used:
+   previous code used:1
 
    ```ts
    const spread = Math.abs(poly.yesPrice - kalshi.yesPrice);
@@ -210,7 +210,7 @@ Conclusion: at the time of the live scan, the correct trade was no trade. The fi
 Latest strict live endpoint check:
 
 ```text
-GET /api/markets/arbitrage?minSpread=0.01&minConfidence=0&limit=5
+GET /api/markets/arbitrage?minSpread=0&minConfidence=0&limit=10
 
 opportunities: []
 markets_analyzed: 2396
@@ -218,7 +218,11 @@ polymarket_count: 1200
 kalshi_count: 1196
 ```
 
-Even with a permissive 1% threshold and zero confidence filter, the fixed matcher returned no valid covered arbs. This confirms that the bot not executing trades is the intended safety behavior, not a broken integration.
+I also temporarily lowered the bot discovery threshold from `ARB_MIN_EDGE=0.05` to `ARB_MIN_EDGE=0.00` and queried the API with `minSpread=0`. The fixed matcher still returned no valid covered arbs. This confirms that the bot not executing trades was not caused by an overly high spread threshold; the live data did not contain any contract-equivalent covered bundle at or above break-even. After this test, I restored the bot to the safer production setting:
+
+```text
+ARB_MIN_EDGE=0.05
+```
 
 ## Files Changed
 
